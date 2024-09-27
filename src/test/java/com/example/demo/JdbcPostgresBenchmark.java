@@ -16,16 +16,22 @@
 package com.example.demo;
 
 import io.r2dbc.pool.ConnectionPool;
-import io.r2dbc.spi.Connection;
+import org.openjdk.jmh.infra.Blackhole;
 import reactor.core.publisher.Flux;
 
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.concurrent.TimeUnit;
+
+import javax.sql.DataSource;
 
 import org.junit.platform.commons.annotation.Testable;
 import org.openjdk.jmh.annotations.*;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.r2dbc.core.DatabaseClient;
 
 /**
@@ -37,16 +43,16 @@ import org.springframework.r2dbc.core.DatabaseClient;
 @Measurement(time = 5, timeUnit = TimeUnit.SECONDS)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @BenchmarkMode(Mode.Throughput)
-@Threads(40)
+@Threads(20)
 @Testable
-public class R2dbcPostgresBenchmark {
+public class JdbcPostgresBenchmark {
 
 	@State(value = Scope.Benchmark)
 	public static class Resources {
 
 		ConfigurableApplicationContext ctx;
-		ConnectionPool pool;
-		DatabaseClient client;
+		DataSource pool;
+		JdbcTemplate template;
 
 		@Setup
 		public void setup() {
@@ -54,10 +60,9 @@ public class R2dbcPostgresBenchmark {
 
 			ctx = SpringApplication.run(Demo1Application.class);
 
-			pool = ctx.getBean(ConnectionPool.class);
-			pool.warmup().block();
+			pool = ctx.getBean(DataSource.class);
 
-			client = ctx.getBean(DatabaseClient.class);
+			template = ctx.getBean(JdbcTemplate.class);
 		}
 
 		@TearDown
@@ -67,19 +72,22 @@ public class R2dbcPostgresBenchmark {
 	}
 
 	@Benchmark
-	public Object benchmark(Resources resources) {
+	public void benchmark(Resources resources, Blackhole bh) throws Exception {
 
 		// create table demo (
 		// id integer
 		// );
 		// empty table
 
-		return Flux.usingWhen(resources.pool.create(), connection -> {
-			return Flux.from(connection.createStatement("SELECT * FROM demo")
-					.execute()).flatMap(it -> it.map(readable -> readable.get(0)));
-				},
-				Connection::close
-		).blockLast();
+		Connection connection = resources.pool.getConnection();
+		Statement statement = connection.createStatement();
+		ResultSet resultSet = statement.executeQuery("SELECT * from demo");
+		while (resultSet.next()) {
+			bh.consume(resultSet.getObject(1));
+		}
 
+		resultSet.close();
+		statement.close();
+		connection.close();
 	}
 }
